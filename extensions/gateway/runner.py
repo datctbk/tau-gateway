@@ -11,6 +11,7 @@ import asyncio
 import logging
 import signal
 import time
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -281,6 +282,92 @@ class GatewayRunner:
             })
             return f"⚠️ Error processing your message: {exc}"
 
+    # ── Cron Scheduling ──
+
+    async def _execute_cron_job(self, job: dict) -> str:
+        """Run the backend agent for a scheduled cron job."""
+        from tau.sdk import create_session
+        try:
+            from cron.scheduler import _build_job_prompt
+            prompt = _build_job_prompt(job)
+        except ImportError:
+            prompt = job.get("prompt", "")
+
+        job_id = job.get("id", "unknown")
+        system_prompt = self.config.system_prompt or ""
+
+        with create_session(
+            provider=self.config.provider,
+            model=self.config.model,
+            system_prompt=system_prompt,
+            workspace=".",
+            session_name=f"cron-{job_id[:8]}",
+            in_memory=True,
+            load_extensions=True,
+            load_skills=True,
+        ) as sub:
+            from tau.core.types import TextDelta
+            events = sub.prompt_sync(prompt)
+            response = "".join(
+                e.text for e in events
+                if isinstance(e, TextDelta) and not getattr(e, "is_thinking", False)
+            )
+        return response.strip()
+
+    async def _deliver_cron_job(self, job: dict, output: str) -> None:
+        """Deliver the cron job output via the delivery router."""
+        try:
+            from cron.scheduler import _resolve_delivery_target
+        except ImportError:
+            return
+
+        target = _resolve_delivery_target(job)
+        if not target:
+            return
+
+        platform = target["platform"]
+        chat_id = target["chat_id"]
+
+        await self._delivery.send_to(platform, chat_id, output)
+
+    def _run_cron_loop(self, loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event) -> None:
+        """Background thread loop for evaluating cron ticks."""
+        try:
+            from cron.scheduler import tick
+        except ImportError:
+            logger.warning("Cron scheduler not available. Background jobs disabled.")
+            return
+
+        def run_job(job: dict) -> tuple[bool, str]:
+            future = asyncio.run_coroutine_threadsafe(self._execute_cron_job(job), loop)
+            try:
+                output = future.result(timeout=300)
+                return True, output
+            except Exception as e:
+                logger.error("Cron job %s failed: %s", job.get("id"), e)
+                return False, str(e)
+
+        def deliver_job(job: dict, output: str) -> Optional[str]:
+            future = asyncio.run_coroutine_threadsafe(self._deliver_cron_job(job, output), loop)
+            try:
+                future.result(timeout=60)
+                return None
+            except Exception as e:
+                return str(e)
+
+        logger.info("Cron scheduler thread started")
+        while not stop_event.is_set():
+            try:
+                tick(run_fn=run_job, deliver_fn=deliver_job)
+            except Exception as e:
+                logger.error("Cron tick failed: %s", e)
+
+            # Sleep 60 seconds, checking stop_event frequently
+            for _ in range(60):
+                if stop_event.is_set():
+                    break
+                time.sleep(1)
+
     # ── Status ──
 
     def _format_status(self) -> str:
@@ -369,6 +456,14 @@ class GatewayRunner:
                 loop.add_signal_handler(sig, _signal_handler)
             except NotImplementedError:
                 pass  # Windows
+
+        cron_thread = threading.Thread(
+            target=self._run_cron_loop,
+            args=(loop, stop_event),
+            daemon=True,
+            name="CronScheduler"
+        )
+        cron_thread.start()
 
         await stop_event.wait()
         await self.shutdown()

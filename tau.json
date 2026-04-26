@@ -1,0 +1,8 @@
+{
+  "name": "tau-gateway",
+  "version": "0.1.0",
+  "description": "Multi-platform messaging gateway — connect tau to Telegram, Discord, Slack, and REST APIs.",
+  "author": "datctbk",
+  "extensions": ["extensions/gateway"],
+  "skills": []
+}

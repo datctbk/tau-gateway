@@ -105,7 +105,13 @@ class GatewayExtension(Extension):
         if not fp.exists():
             return None
         try:
-            return int(fp.read_text(encoding="utf-8").strip())
+            raw = fp.read_text(encoding="utf-8").strip()
+            # Backward/forward compatibility:
+            # - "12345"
+            # - "pid=12345"
+            if raw.startswith("pid="):
+                raw = raw.split("=", 1)[1].strip()
+            return int(raw)
         except Exception:
             return None
 
@@ -127,6 +133,24 @@ class GatewayExtension(Extension):
             return True
         except OSError:
             return False
+
+    @staticmethod
+    def _pid_cmdline(pid: int) -> str:
+        try:
+            out = subprocess.check_output(
+                ["ps", "-o", "command=", "-p", str(pid)],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            return out.strip()
+        except Exception:
+            return ""
+
+    def _looks_like_gateway_pid(self, pid: int) -> bool:
+        cmd = self._pid_cmdline(pid).lower()
+        if not cmd:
+            return False
+        return "tau-gateway" in cmd or "extensions.gateway.runner" in cmd or "__main__.py" in cmd
 
     def _find_gateway_entrypoint(self) -> Path | None:
         # Installed package layout (this file: .../extensions/gateway/extension.py)
@@ -432,7 +456,12 @@ class GatewayExtension(Extension):
 
         managed_pid = self._read_managed_pid()
         managed_running = bool(managed_pid and self._is_pid_running(managed_pid))
-        if managed_pid and not managed_running:
+        if managed_pid and managed_running and not self._looks_like_gateway_pid(managed_pid):
+            self._clear_managed_pid()
+            managed_pid = None
+            managed_running = False
+            lines.append("[yellow]○ Managed PID was stale/non-gateway and was cleared[/yellow]")
+        elif managed_pid and not managed_running:
             self._clear_managed_pid()
 
         if managed_running:
@@ -564,12 +593,33 @@ class GatewayExtension(Extension):
             self._clear_managed_pid()
             context.print("[yellow]Managed gateway PID is stale; cleared.[/yellow]")
             return
+        if not self._looks_like_gateway_pid(pid):
+            self._clear_managed_pid()
+            context.print(
+                f"[yellow]Managed PID {pid} does not look like gateway; cleared for safety.[/yellow]"
+            )
+            return
 
         try:
             os.kill(pid, signal.SIGTERM)
         except Exception as exc:
             context.print(f"[red]Failed to stop gateway pid={pid}: {exc}[/red]")
             return
+
+        # Graceful wait up to ~10s (polling adapter shutdown can take a few seconds)
+        for _ in range(100):
+            if not self._is_pid_running(pid):
+                self._clear_managed_pid()
+                context.print(f"[green]Stopped gateway daemon[/green] (pid={pid})")
+                return
+            time.sleep(0.1)
+
+        # If still alive, terminate the entire process group.
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGTERM)
+        except Exception:
+            pass
 
         for _ in range(30):
             if not self._is_pid_running(pid):
@@ -580,7 +630,11 @@ class GatewayExtension(Extension):
 
         if hasattr(signal, "SIGKILL"):
             try:
-                os.kill(pid, signal.SIGKILL)
+                pgid = os.getpgid(pid)
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except Exception:
+                    os.kill(pid, signal.SIGKILL)
             except Exception:
                 pass
 

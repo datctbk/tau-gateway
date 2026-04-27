@@ -85,6 +85,19 @@ class GatewayExtension(Extension):
         except Exception:
             pass
 
+    def on_unload(self) -> None:
+        """Stop managed gateway when extension unloads (e.g. tau exit/reload)."""
+        pid = self._read_managed_pid()
+        if not pid or not self._is_pid_running(pid):
+            self._clear_managed_pid()
+            return
+        # Only stop if it still looks like a gateway process.
+        if not self._looks_like_gateway_pid(pid):
+            self._clear_managed_pid()
+            return
+        self._terminate_pid(pid)
+        self._clear_managed_pid()
+
     # ------------------------------------------------------------------
     # Standalone daemon helpers
     # ------------------------------------------------------------------
@@ -165,6 +178,83 @@ class GatewayExtension(Extension):
             return local
 
         return None
+
+    @staticmethod
+    def _list_gateway_pids() -> list[int]:
+        """Return running gateway daemon pids discovered from process command lines."""
+        try:
+            out = subprocess.check_output(
+                ["ps", "-axo", "pid=,command="],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except Exception:
+            return []
+
+        pids: list[int] = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            pid_str, cmd = parts
+            try:
+                pid = int(pid_str)
+            except Exception:
+                continue
+            low = cmd.lower()
+            if "tau-gateway/__main__.py" in low or "tau_gateway/__main__.py" in low:
+                pids.append(pid)
+        return pids
+
+    @staticmethod
+    def _terminate_pid(pid: int) -> bool:
+        """Terminate a pid (and its process group) with graceful then forceful fallback."""
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            return False
+
+        for _ in range(100):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return True
+            time.sleep(0.1)
+
+        # Escalate to process group
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGTERM)
+        except Exception:
+            pass
+
+        for _ in range(30):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return True
+            time.sleep(0.1)
+
+        if hasattr(signal, "SIGKILL"):
+            try:
+                pgid = os.getpgid(pid)
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except Exception:
+                    os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+        try:
+            os.kill(pid, 0)
+            return False
+        except OSError:
+            return True
 
     # ------------------------------------------------------------------
     # Tools
@@ -545,15 +635,15 @@ class GatewayExtension(Extension):
         context.print("\n".join(lines))
 
     def _handle_gateway_start_slash(self, context: ExtensionContext) -> None:
-        pid = self._read_managed_pid()
-        if pid and self._is_pid_running(pid):
-            context.print(
-                f"[green]Gateway already running[/green] (pid={pid})\n"
-                f"[dim]Log: {self._managed_log_path()}[/dim]"
-            )
-            return
-        if pid and not self._is_pid_running(pid):
-            self._clear_managed_pid()
+        # Restart semantics: stop all currently running gateway daemons first.
+        current_pid = os.getpid()
+        stopped = 0
+        for pid in self._list_gateway_pids():
+            if pid == current_pid:
+                continue
+            if self._terminate_pid(pid):
+                stopped += 1
+        self._clear_managed_pid()
 
         entry = self._find_gateway_entrypoint()
         if entry is None:
@@ -583,13 +673,24 @@ class GatewayExtension(Extension):
         self._write_managed_pid(proc.pid)
         context.print(
             f"[green]Started gateway daemon[/green] (pid={proc.pid})\n"
+            f"[dim]Stopped existing gateway processes: {stopped}[/dim]\n"
             f"[dim]Log: {log_path}[/dim]"
         )
 
     def _handle_gateway_stop_slash(self, context: ExtensionContext) -> None:
         pid = self._read_managed_pid()
         if not pid:
-            context.print("[yellow]No managed gateway PID found.[/yellow]")
+            # Fall back: stop any discovered gateway daemons.
+            current_pid = os.getpid()
+            candidates = [p for p in self._list_gateway_pids() if p != current_pid]
+            if not candidates:
+                context.print("[yellow]No managed gateway PID found.[/yellow]")
+                return
+            stopped = 0
+            for p in candidates:
+                if self._terminate_pid(p):
+                    stopped += 1
+            context.print(f"[green]Stopped gateway daemons[/green] (count={stopped})")
             return
         if not self._is_pid_running(pid):
             self._clear_managed_pid()
@@ -602,45 +703,7 @@ class GatewayExtension(Extension):
             )
             return
 
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except Exception as exc:
-            context.print(f"[red]Failed to stop gateway pid={pid}: {exc}[/red]")
-            return
-
-        # Graceful wait up to ~10s (polling adapter shutdown can take a few seconds)
-        for _ in range(100):
-            if not self._is_pid_running(pid):
-                self._clear_managed_pid()
-                context.print(f"[green]Stopped gateway daemon[/green] (pid={pid})")
-                return
-            time.sleep(0.1)
-
-        # If still alive, terminate the entire process group.
-        try:
-            pgid = os.getpgid(pid)
-            os.killpg(pgid, signal.SIGTERM)
-        except Exception:
-            pass
-
-        for _ in range(30):
-            if not self._is_pid_running(pid):
-                self._clear_managed_pid()
-                context.print(f"[green]Stopped gateway daemon[/green] (pid={pid})")
-                return
-            time.sleep(0.1)
-
-        if hasattr(signal, "SIGKILL"):
-            try:
-                pgid = os.getpgid(pid)
-                try:
-                    os.killpg(pgid, signal.SIGKILL)
-                except Exception:
-                    os.kill(pid, signal.SIGKILL)
-            except Exception:
-                pass
-
-        if not self._is_pid_running(pid):
+        if self._terminate_pid(pid):
             self._clear_managed_pid()
             context.print(f"[green]Stopped gateway daemon[/green] (pid={pid})")
             return

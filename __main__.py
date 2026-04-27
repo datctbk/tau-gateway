@@ -1,4 +1,4 @@
-"""Standalone entry point: python -m tau_gateway."""
+"""Standalone entry point: python3 tau-gateway/__main__.py."""
 
 import asyncio
 import sys

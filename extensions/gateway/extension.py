@@ -11,6 +11,7 @@ Tools registered:
 
 Slash commands:
   /gateway   : Show gateway status
+  /gateway-setup : Setup guide for gateway platforms
   /send      : Quick-send to a platform target
   /channels  : List available messaging targets
 """
@@ -175,6 +176,11 @@ class GatewayExtension(Extension):
                 usage="/send <target> <message>",
             ),
             SlashCommand(
+                name="gateway-setup",
+                description="Show setup steps for a gateway platform (e.g. telegram).",
+                usage="/gateway-setup telegram",
+            ),
+            SlashCommand(
                 name="channels",
                 description="List available messaging targets.",
                 usage="/channels [platform]",
@@ -187,6 +193,9 @@ class GatewayExtension(Extension):
             return True
         elif command == "send":
             self._handle_send_slash(args, context)
+            return True
+        elif command == "gateway-setup":
+            self._handle_gateway_setup_slash(args, context)
             return True
         elif command == "channels":
             self._handle_channels_slash(args, context)
@@ -263,7 +272,7 @@ class GatewayExtension(Extension):
 
         return (
             "Gateway is not running. Start it with:\n"
-            "  python -m tau_gateway\n\n"
+            "  python3 tau-gateway/__main__.py\n\n"
             "Or set platform tokens via environment variables:\n"
             "  TAU_GATEWAY_TELEGRAM_TOKEN=...\n"
             "  TAU_GATEWAY_DISCORD_TOKEN=..."
@@ -348,7 +357,7 @@ class GatewayExtension(Extension):
             lines.append(f"  Sessions: {self._runner._sessions.session_count}")
         else:
             lines.append("[yellow]○ Gateway is not running[/yellow]")
-            lines.append("  Start with: python -m tau_gateway")
+            lines.append("  Start with: python3 tau-gateway/__main__.py")
 
         if self._state_db:
             try:
@@ -373,6 +382,45 @@ class GatewayExtension(Extension):
         target, message = parts
         result = self._handle_send_message(action="send", target=target, message=message)
         context.print(result)
+
+    def _handle_gateway_setup_slash(self, args: str, context: ExtensionContext) -> None:
+        """Handle /gateway-setup <platform>."""
+        platform = (args or "").strip().lower() or "telegram"
+        if platform != "telegram":
+            context.print(f"[dim]Unsupported platform '{platform}'. Currently supported: telegram[/dim]")
+            return
+
+        lines = [
+            "[bold cyan]Telegram Gateway Setup[/bold cyan]",
+            "",
+            "1) Install dependencies:",
+            "   python3 -m pip install \"python-telegram-bot>=20\" pyyaml",
+            "",
+            "2) Export env vars:",
+            "   export TAU_GATEWAY_TELEGRAM_TOKEN=\"<BOT_TOKEN>\"",
+            "   export TAU_GATEWAY_PROVIDER=\"openai\"",
+            "   export TAU_GATEWAY_MODEL=\"gpt-4o-mini\"",
+            "   export OPENAI_API_KEY=\"<YOUR_OPENAI_KEY>\"",
+            "",
+            "3) Run gateway:",
+            "   python3 tau-gateway/__main__.py",
+            "",
+            "4) Verify in Telegram:",
+            "   /start",
+            "   /status",
+            "   (then send a normal message)",
+            "",
+            "Optional ~/.tau/gateway.yaml:",
+            "platforms:",
+            "  telegram:",
+            "    platform: telegram",
+            "    enabled: true",
+            "    token: \"<BOT_TOKEN>\"",
+            "    reply_to_mode: always",
+            "provider: openai",
+            "model: gpt-4o-mini",
+        ]
+        context.print("\n".join(lines))
 
     def _handle_channels_slash(self, args: str, context: ExtensionContext) -> None:
         """Handle /channels [platform]."""

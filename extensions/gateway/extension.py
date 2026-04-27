@@ -141,6 +141,18 @@ class GatewayExtension(Extension):
     def _is_pid_running(pid: int) -> bool:
         if pid <= 0:
             return False
+        # Treat zombie processes as not running; they can linger briefly
+        # and make os.kill(pid, 0) return success.
+        try:
+            stat_out = subprocess.check_output(
+                ["ps", "-o", "stat=", "-p", str(pid)],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            if stat_out and stat_out.upper().startswith("Z"):
+                return False
+        except Exception:
+            pass
         try:
             os.kill(pid, 0)
             return True

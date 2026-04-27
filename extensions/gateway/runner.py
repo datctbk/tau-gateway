@@ -449,12 +449,25 @@ class GatewayRunner:
 
         # Start all adapters
         start_tasks = []
+        start_names: list[str] = []
         for name, adapter in self._adapters.items():
             logger.info("Starting %s adapter...", name)
             start_tasks.append(adapter.start())
+            start_names.append(name)
 
         if start_tasks:
-            await asyncio.gather(*start_tasks, return_exceptions=True)
+            results = await asyncio.gather(*start_tasks, return_exceptions=True)
+            failed: list[str] = []
+            for name, result in zip(start_names, results):
+                if isinstance(result, Exception):
+                    logger.error("Adapter %s failed to start: %s", name, result, exc_info=result)
+                    failed.append(name)
+            for name in failed:
+                self._adapters.pop(name, None)
+
+        if not self._adapters:
+            logger.error("All adapters failed to start. Shutting down.")
+            return
 
         # Refresh channel directory
         await self._channels.refresh_from_adapters(self._adapters)

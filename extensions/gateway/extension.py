@@ -28,6 +28,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -64,6 +65,8 @@ class GatewayExtension(Extension):
         self._state_db: Any = None
         self._runner: Any = None
         self._channel_directory: Any = None
+        self._stop_lock = threading.Lock()
+        self._stop_in_progress = False
 
     def on_load(self, context: ExtensionContext) -> None:
         self._ext_context = context
@@ -564,6 +567,9 @@ class GatewayExtension(Extension):
     def _handle_gateway_status(self, context: ExtensionContext) -> None:
         """Show gateway status."""
         lines = ["[bold cyan]🤖 Gateway Status[/bold cyan]", ""]
+        if self._stop_in_progress:
+            lines.append("[yellow]◔ Gateway stop in progress...[/yellow]")
+            lines.append("")
 
         managed_pid = self._read_managed_pid()
         managed_running = bool(managed_pid and self._is_pid_running(managed_pid))
@@ -707,40 +713,47 @@ class GatewayExtension(Extension):
         )
 
     def _handle_gateway_stop_slash(self, context: ExtensionContext) -> None:
-        pid = self._read_managed_pid()
-        if not pid:
-            # Fall back: stop any discovered gateway daemons.
-            current_pid = os.getpid()
-            candidates = [p for p in self._list_gateway_pids() if p != current_pid]
-            if not candidates:
-                context.print("[yellow]No managed gateway PID found.[/yellow]")
+        with self._stop_lock:
+            if self._stop_in_progress:
+                context.print("[yellow]Gateway stop is already in progress.[/yellow]")
                 return
-            stopped = 0
-            for p in candidates:
-                if self._terminate_pid(p):
-                    stopped += 1
-            context.print(f"[green]Stopped gateway daemons[/green] (count={stopped})")
-            return
-        if not self._is_pid_running(pid):
-            self._clear_managed_pid()
-            context.print("[yellow]Managed gateway PID is stale; cleared.[/yellow]")
-            return
-        if not self._looks_like_gateway_pid(pid):
-            self._clear_managed_pid()
-            context.print(
-                f"[yellow]Managed PID {pid} does not look like gateway; cleared for safety.[/yellow]"
-            )
+            self._stop_in_progress = True
+
+        pid = self._read_managed_pid()
+        current_pid = os.getpid()
+        fallback_candidates = [p for p in self._list_gateway_pids() if p != current_pid]
+
+        # No known targets at all.
+        if not pid and not fallback_candidates:
+            with self._stop_lock:
+                self._stop_in_progress = False
+            context.print("[yellow]No managed gateway PID found.[/yellow]")
             return
 
-        if self._terminate_pid(pid):
-            self._clear_managed_pid()
-            context.print(f"[green]Stopped gateway daemon[/green] (pid={pid})")
-            return
+        def _worker() -> None:
+            try:
+                if pid:
+                    if not self._is_pid_running(pid):
+                        self._clear_managed_pid()
+                        return
+                    if not self._looks_like_gateway_pid(pid):
+                        self._clear_managed_pid()
+                        return
+                    if self._terminate_pid(pid):
+                        self._clear_managed_pid()
+                        return
+                    # Keep pid for manual diagnostics if stop failed.
+                    return
 
-        context.print(
-            f"[red]Gateway did not stop in time[/red] (pid={pid}). "
-            "Please stop it manually."
-        )
+                # Fallback: stop discovered gateway daemons.
+                for p in fallback_candidates:
+                    self._terminate_pid(p)
+            finally:
+                with self._stop_lock:
+                    self._stop_in_progress = False
+
+        threading.Thread(target=_worker, daemon=True, name="GatewayStopWorker").start()
+        context.print("[yellow]Stopping gateway in background...[/yellow] Check /gateway in a few seconds.")
 
     def _handle_channels_slash(self, args: str, context: ExtensionContext) -> None:
         """Handle /channels [platform]."""

@@ -15,3 +15,13 @@ tests/__pycache__/test_hooks.cpython-39-pytest-8.4.2.pyc
 tests/__pycache__/test_runner.cpython-39-pytest-8.4.2.pyc
 tests/__pycache__/test_session.cpython-39-pytest-8.4.2.pyc
 tests/__pycache__/test_types.cpython-39-pytest-8.4.2.pyc
+extensions/gateway/__pycache__/adapter.cpython-311.pyc
+extensions/gateway/__pycache__/channel_directory.cpython-311.pyc
+extensions/gateway/__pycache__/config.cpython-311.pyc
+extensions/gateway/__pycache__/delivery.cpython-311.pyc
+extensions/gateway/__pycache__/hooks.cpython-311.pyc
+extensions/gateway/__pycache__/runner.cpython-311.pyc
+extensions/gateway/__pycache__/session.cpython-311.pyc
+extensions/gateway/__pycache__/types.cpython-311.pyc
+extensions/gateway/platforms/__pycache__/__init__.cpython-311.pyc
+extensions/gateway/platforms/__pycache__/telegram.cpython-311.pyc

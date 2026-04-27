@@ -176,7 +176,27 @@ class GatewayRunner:
 
     async def _handle_command(self, event: MessageEvent) -> bool:
         """Handle gateway commands like /new, /reset, /status."""
-        text_lower = event.text.lower().strip()
+        raw = (event.text or "").strip()
+        if not raw.startswith("/"):
+            return False
+        # Telegram group commands may arrive as /status@BotName
+        cmd = raw.split(None, 1)[0].lower()
+        text_lower = cmd.split("@", 1)[0]
+
+        if text_lower in ("/start", "/help"):
+            await self._delivery.send_to(
+                event.source.platform,
+                event.source.chat_id,
+                (
+                    "Hello! I am tau-gateway.\n"
+                    "Commands:\n"
+                    "/status - show gateway status\n"
+                    "/new or /reset - reset current session\n"
+                    "/channels - list known channels"
+                ),
+                thread_id=event.source.thread_id,
+            )
+            return True
 
         if text_lower in ("/new", "/reset"):
             entry = self._sessions.reset_by_source(event.source)

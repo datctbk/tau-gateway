@@ -35,7 +35,6 @@ class TelegramAdapter(BasePlatformAdapter):
             from telegram.ext import (
                 ApplicationBuilder,
                 MessageHandler,
-                CommandHandler,
                 filters,
             )
         except ImportError:
@@ -59,18 +58,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 self._on_text_message,
             )
         )
-        self._app.add_handler(
-            CommandHandler("start", self._on_command)
-        )
-        self._app.add_handler(
-            CommandHandler("new", self._on_command)
-        )
-        self._app.add_handler(
-            CommandHandler("reset", self._on_command)
-        )
-        self._app.add_handler(
-            CommandHandler("status", self._on_command)
-        )
+        # Capture all slash commands (e.g. /status, /status@BotName, /channels).
+        self._app.add_handler(MessageHandler(filters.COMMAND, self._on_command))
         self._app.add_handler(
             MessageHandler(filters.PHOTO, self._on_photo)
         )

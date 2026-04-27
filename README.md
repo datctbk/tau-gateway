@@ -61,6 +61,10 @@ python3 tau-gateway/__main__.py
 - Telegram adapter currently uses polling mode.
 - In tau REPL (with gateway extension loaded), run `/gateway-setup telegram`
   to print setup commands and a config template.
+- You can manage daemon lifecycle from tau REPL:
+  - `/gateway-start` starts gateway in background (log: `~/.tau/gateway/gateway.log`)
+  - `/gateway-stop` stops the managed background process
+  - `/gateway` shows managed PID/log status
 - `reply_to_mode`:
   - `always`: reply to all messages
   - `mention`: in groups, only reply when bot is mentioned

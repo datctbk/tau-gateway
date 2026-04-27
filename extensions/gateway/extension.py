@@ -12,6 +12,8 @@ Tools registered:
 Slash commands:
   /gateway   : Show gateway status
   /gateway-setup : Setup guide for gateway platforms
+  /gateway-start : Start standalone gateway daemon
+  /gateway-stop  : Stop standalone gateway daemon
   /send      : Quick-send to a platform target
   /channels  : List available messaging targets
 """
@@ -21,7 +23,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 from tau.core.extension import Extension, ExtensionContext
@@ -77,6 +84,63 @@ class GatewayExtension(Extension):
             self._channel_directory = ChannelDirectory()
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Standalone daemon helpers
+    # ------------------------------------------------------------------
+
+    def _gateway_runtime_dir(self) -> Path:
+        p = Path.home() / ".tau" / "gateway"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _managed_pid_path(self) -> Path:
+        return self._gateway_runtime_dir() / "gateway.pid"
+
+    def _managed_log_path(self) -> Path:
+        return self._gateway_runtime_dir() / "gateway.log"
+
+    def _read_managed_pid(self) -> int | None:
+        fp = self._managed_pid_path()
+        if not fp.exists():
+            return None
+        try:
+            return int(fp.read_text(encoding="utf-8").strip())
+        except Exception:
+            return None
+
+    def _write_managed_pid(self, pid: int) -> None:
+        self._managed_pid_path().write_text(str(pid), encoding="utf-8")
+
+    def _clear_managed_pid(self) -> None:
+        try:
+            self._managed_pid_path().unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_pid_running(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def _find_gateway_entrypoint(self) -> Path | None:
+        # Installed package layout (this file: .../extensions/gateway/extension.py)
+        pkg_root = Path(__file__).resolve().parents[2]
+        installed = pkg_root / "__main__.py"
+        if installed.is_file():
+            return installed
+
+        # Local repo layout from cwd
+        local = Path.cwd() / "tau-gateway" / "__main__.py"
+        if local.is_file():
+            return local
+
+        return None
 
     # ------------------------------------------------------------------
     # Tools
@@ -181,6 +245,16 @@ class GatewayExtension(Extension):
                 usage="/gateway-setup telegram",
             ),
             SlashCommand(
+                name="gateway-start",
+                description="Start standalone gateway daemon in the background.",
+                usage="/gateway-start",
+            ),
+            SlashCommand(
+                name="gateway-stop",
+                description="Stop standalone gateway daemon started by /gateway-start.",
+                usage="/gateway-stop",
+            ),
+            SlashCommand(
                 name="channels",
                 description="List available messaging targets.",
                 usage="/channels [platform]",
@@ -196,6 +270,12 @@ class GatewayExtension(Extension):
             return True
         elif command == "gateway-setup":
             self._handle_gateway_setup_slash(args, context)
+            return True
+        elif command == "gateway-start":
+            self._handle_gateway_start_slash(context)
+            return True
+        elif command == "gateway-stop":
+            self._handle_gateway_stop_slash(context)
             return True
         elif command == "channels":
             self._handle_channels_slash(args, context)
@@ -350,14 +430,24 @@ class GatewayExtension(Extension):
         """Show gateway status."""
         lines = ["[bold cyan]🤖 Gateway Status[/bold cyan]", ""]
 
-        if self._runner and self._runner._running:
+        managed_pid = self._read_managed_pid()
+        managed_running = bool(managed_pid and self._is_pid_running(managed_pid))
+        if managed_pid and not managed_running:
+            self._clear_managed_pid()
+
+        if managed_running:
+            lines.append("[green]● Standalone gateway daemon is running[/green]")
+            lines.append(f"  PID: {managed_pid}")
+            lines.append(f"  Log: {self._managed_log_path()}")
+        elif self._runner and self._runner._running:
             lines.append("[green]● Gateway is running[/green]")
             adapters = self._runner._adapters
             lines.append(f"  Platforms: {', '.join(adapters.keys())}")
             lines.append(f"  Sessions: {self._runner._sessions.session_count}")
         else:
             lines.append("[yellow]○ Gateway is not running[/yellow]")
-            lines.append("  Start with: python3 tau-gateway/__main__.py")
+            lines.append("  Start with: /gateway-start")
+            lines.append("  (or run: python3 tau-gateway/__main__.py)")
 
         if self._state_db:
             try:
@@ -404,6 +494,7 @@ class GatewayExtension(Extension):
             "",
             "3) Run gateway:",
             "   python3 tau-gateway/__main__.py",
+            "   (or from tau: /gateway-start)",
             "",
             "4) Verify in Telegram:",
             "   /start",
@@ -421,6 +512,87 @@ class GatewayExtension(Extension):
             "model: gpt-4o-mini",
         ]
         context.print("\n".join(lines))
+
+    def _handle_gateway_start_slash(self, context: ExtensionContext) -> None:
+        pid = self._read_managed_pid()
+        if pid and self._is_pid_running(pid):
+            context.print(
+                f"[green]Gateway already running[/green] (pid={pid})\n"
+                f"[dim]Log: {self._managed_log_path()}[/dim]"
+            )
+            return
+        if pid and not self._is_pid_running(pid):
+            self._clear_managed_pid()
+
+        entry = self._find_gateway_entrypoint()
+        if entry is None:
+            context.print("[red]Could not find gateway entrypoint (__main__.py).[/red]")
+            return
+
+        log_path = self._managed_log_path()
+        with log_path.open("ab") as logf:
+            proc = subprocess.Popen(
+                [sys.executable, str(entry)],
+                cwd=str(entry.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env=os.environ.copy(),
+            )
+
+        time.sleep(0.8)
+        if proc.poll() is not None:
+            context.print(
+                "[red]Gateway failed to start.[/red]\n"
+                f"[dim]Check log: {log_path}[/dim]"
+            )
+            return
+
+        self._write_managed_pid(proc.pid)
+        context.print(
+            f"[green]Started gateway daemon[/green] (pid={proc.pid})\n"
+            f"[dim]Log: {log_path}[/dim]"
+        )
+
+    def _handle_gateway_stop_slash(self, context: ExtensionContext) -> None:
+        pid = self._read_managed_pid()
+        if not pid:
+            context.print("[yellow]No managed gateway PID found.[/yellow]")
+            return
+        if not self._is_pid_running(pid):
+            self._clear_managed_pid()
+            context.print("[yellow]Managed gateway PID is stale; cleared.[/yellow]")
+            return
+
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception as exc:
+            context.print(f"[red]Failed to stop gateway pid={pid}: {exc}[/red]")
+            return
+
+        for _ in range(30):
+            if not self._is_pid_running(pid):
+                self._clear_managed_pid()
+                context.print(f"[green]Stopped gateway daemon[/green] (pid={pid})")
+                return
+            time.sleep(0.1)
+
+        if hasattr(signal, "SIGKILL"):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+        if not self._is_pid_running(pid):
+            self._clear_managed_pid()
+            context.print(f"[green]Stopped gateway daemon[/green] (pid={pid})")
+            return
+
+        context.print(
+            f"[red]Gateway did not stop in time[/red] (pid={pid}). "
+            "Please stop it manually."
+        )
 
     def _handle_channels_slash(self, args: str, context: ExtensionContext) -> None:
         """Handle /channels [platform]."""

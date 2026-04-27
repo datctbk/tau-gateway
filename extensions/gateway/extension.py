@@ -166,16 +166,25 @@ class GatewayExtension(Extension):
         return "tau-gateway" in cmd or "extensions.gateway.runner" in cmd or "__main__.py" in cmd
 
     def _find_gateway_entrypoint(self) -> Path | None:
-        # Installed package layout (this file: .../extensions/gateway/extension.py)
-        pkg_root = Path(__file__).resolve().parents[2]
-        installed = pkg_root / "__main__.py"
-        if installed.is_file():
-            return installed
+        # 0) Explicit override for deterministic startup source.
+        override = os.environ.get("TAU_GATEWAY_ENTRYPOINT", "").strip()
+        if override:
+            p = Path(override).expanduser().resolve()
+            if p.is_file():
+                return p
 
-        # Local repo layout from cwd
-        local = Path.cwd() / "tau-gateway" / "__main__.py"
-        if local.is_file():
-            return local
+        # 1) Canonical default: entrypoint next to the loaded extension package.
+        #    This keeps local-dev and installed-package behavior consistent.
+        pkg_root = Path(__file__).resolve().parents[2]
+        canonical = pkg_root / "__main__.py"
+        if canonical.is_file():
+            return canonical
+
+        # 2) Optional fallback for legacy workflows. Disabled by default.
+        if os.environ.get("TAU_GATEWAY_ALLOW_CWD_ENTRYPOINT", "").strip() == "1":
+            local = Path.cwd() / "tau-gateway" / "__main__.py"
+            if local.is_file():
+                return local
 
         return None
 
@@ -558,6 +567,7 @@ class GatewayExtension(Extension):
             lines.append("[green]● Standalone gateway daemon is running[/green]")
             lines.append(f"  PID: {managed_pid}")
             lines.append(f"  Log: {self._managed_log_path()}")
+            lines.append(f"  Source: {self._pid_cmdline(managed_pid) or '(unknown)'}")
         elif self._runner and self._runner._running:
             lines.append("[green]● Gateway is running[/green]")
             adapters = self._runner._adapters
@@ -566,7 +576,11 @@ class GatewayExtension(Extension):
         else:
             lines.append("[yellow]○ Gateway is not running[/yellow]")
             lines.append("  Start with: /gateway-start")
-            lines.append("  (or run: python3 tau-gateway/__main__.py)")
+            ep = self._find_gateway_entrypoint()
+            if ep is not None:
+                lines.append(f"  (or run: python3 {ep})")
+            else:
+                lines.append("  (set TAU_GATEWAY_ENTRYPOINT=/abs/path/__main__.py)")
 
         if self._state_db:
             try:
@@ -613,8 +627,10 @@ class GatewayExtension(Extension):
             "   export OPENAI_API_KEY=\"<YOUR_OPENAI_KEY>\"",
             "",
             "3) Run gateway:",
-            "   python3 tau-gateway/__main__.py",
-            "   (or from tau: /gateway-start)",
+            "   /gateway-start",
+            "   # deterministic entrypoint from loaded package",
+            "   # optional override:",
+            "   # export TAU_GATEWAY_ENTRYPOINT=/abs/path/__main__.py",
             "",
             "4) Verify in Telegram:",
             "   /start",
@@ -674,6 +690,7 @@ class GatewayExtension(Extension):
         context.print(
             f"[green]Started gateway daemon[/green] (pid={proc.pid})\n"
             f"[dim]Stopped existing gateway processes: {stopped}[/dim]\n"
+            f"[dim]Entrypoint: {entry}[/dim]\n"
             f"[dim]Log: {log_path}[/dim]"
         )
 

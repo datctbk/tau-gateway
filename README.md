@@ -49,7 +49,11 @@ max_turns: 20
 3) Run gateway
 
 ```bash
-python3 tau-gateway/__main__.py
+# Recommended (inside tau REPL):
+/gateway-start
+
+# Manual deterministic run (uses explicit entrypoint):
+python3 /abs/path/to/tau-gateway/__main__.py
 ```
 
 4) Verify in Telegram
@@ -67,6 +71,10 @@ python3 tau-gateway/__main__.py
   - `/gateway-start` starts gateway in background (log: `~/.tau/gateway/gateway.log`)
   - `/gateway-stop` stops the managed background process
   - `/gateway` shows managed PID/log status
+- Startup source is deterministic:
+  - default: `__main__.py` next to the loaded gateway extension package
+  - override: `TAU_GATEWAY_ENTRYPOINT=/abs/path/to/__main__.py`
+  - legacy cwd fallback is disabled unless `TAU_GATEWAY_ALLOW_CWD_ENTRYPOINT=1`
 - `reply_to_mode`:
   - `always`: reply to all messages
   - `mention`: in groups, only reply when bot is mentioned

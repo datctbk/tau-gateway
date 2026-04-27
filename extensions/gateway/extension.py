@@ -519,6 +519,7 @@ class GatewayExtension(Extension):
             "   export TAU_GATEWAY_TELEGRAM_TOKEN=\"<BOT_TOKEN>\"",
             "   export TAU_GATEWAY_PROVIDER=\"openai\"",
             "   export TAU_GATEWAY_MODEL=\"gpt-4o-mini\"",
+            "   export TAU_GATEWAY_WORKSPACE_ROOT=\"/Users/<you>/workspace_for_ai\"",
             "   export OPENAI_API_KEY=\"<YOUR_OPENAI_KEY>\"",
             "",
             "3) Run gateway:",
@@ -539,6 +540,7 @@ class GatewayExtension(Extension):
             "    reply_to_mode: always",
             "provider: openai",
             "model: gpt-4o-mini",
+            "workspace_root: /Users/<you>/workspace_for_ai",
         ]
         context.print("\n".join(lines))
 

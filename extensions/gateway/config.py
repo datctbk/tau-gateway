@@ -171,6 +171,7 @@ class GatewayConfig:
     reset_policy: SessionResetPolicy = field(default_factory=SessionResetPolicy)
     provider: str = "openai"
     model: str = "gpt-4o"
+    workspace_root: str = "."
     max_tokens: int = 8192
     max_turns: int = 20
     system_prompt: str = ""
@@ -190,6 +191,7 @@ class GatewayConfig:
             "reset_policy": self.reset_policy.to_dict(),
             "provider": self.provider,
             "model": self.model,
+            "workspace_root": self.workspace_root,
             "max_tokens": self.max_tokens,
             "max_turns": self.max_turns,
             "system_prompt": self.system_prompt,
@@ -218,6 +220,7 @@ def load_gateway_config(config_path: Path | None = None) -> GatewayConfig:
         TAU_GATEWAY_API_SERVER_API_KEY
         TAU_GATEWAY_PROVIDER
         TAU_GATEWAY_MODEL
+        TAU_GATEWAY_WORKSPACE_ROOT
     """
     path = config_path or DEFAULT_CONFIG_PATH
     raw: Dict[str, Any] = {}
@@ -276,12 +279,14 @@ def load_gateway_config(config_path: Path | None = None) -> GatewayConfig:
     # Global env overrides
     provider = os.environ.get("TAU_GATEWAY_PROVIDER", raw.get("provider", "openai"))
     model = os.environ.get("TAU_GATEWAY_MODEL", raw.get("model", "gpt-4o"))
+    workspace_root = os.environ.get("TAU_GATEWAY_WORKSPACE_ROOT", raw.get("workspace_root", "."))
 
     return GatewayConfig(
         platforms=platforms,
         reset_policy=reset_policy,
         provider=provider,
         model=model,
+        workspace_root=str(Path(workspace_root).expanduser()),
         max_tokens=int(raw.get("max_tokens", 8192)),
         max_turns=int(raw.get("max_turns", 20)),
         system_prompt=raw.get("system_prompt", ""),

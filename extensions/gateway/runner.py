@@ -271,7 +271,7 @@ class GatewayRunner:
                 provider=self.config.provider,
                 model=self.config.model,
                 system_prompt=system_prompt,
-                workspace=".",
+                workspace=self.config.workspace_root,
                 session_name=f"gateway-{event.source.platform}-{entry.session_key[:8]}",
                 in_memory=True,
                 load_extensions=True,
@@ -320,7 +320,7 @@ class GatewayRunner:
             provider=self.config.provider,
             model=self.config.model,
             system_prompt=system_prompt,
-            workspace=".",
+            workspace=self.config.workspace_root,
             session_name=f"cron-{job_id[:8]}",
             in_memory=True,
             load_extensions=True,
@@ -411,6 +411,8 @@ class GatewayRunner:
         # Sessions
         active = self._sessions.session_count
         lines.append(f"\n💬 **Sessions:** {active} active")
+        lines.append(f"🧠 **Provider/Model:** {self.config.provider}/{self.config.model}")
+        lines.append(f"📁 **Workspace:** {self.config.workspace_root}")
 
         # Channels
         channels = self._channels.list_all()

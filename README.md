@@ -27,6 +27,7 @@ Option A: environment variables
 export TAU_GATEWAY_TELEGRAM_TOKEN="YOUR_BOT_TOKEN"
 export TAU_GATEWAY_PROVIDER="openai"
 export TAU_GATEWAY_MODEL="gpt-4o-mini"
+export TAU_GATEWAY_WORKSPACE_ROOT="/Users/trantandat/Documents/workspace_for_ai"
 ```
 
 Option B: `~/.tau/gateway.yaml` (recommended)
@@ -40,6 +41,7 @@ platforms:
     reply_to_mode: always
 provider: openai
 model: gpt-4o-mini
+workspace_root: /Users/trantandat/Documents/workspace_for_ai
 max_tokens: 8192
 max_turns: 20
 ```

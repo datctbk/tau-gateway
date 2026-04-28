@@ -891,9 +891,33 @@ class GatewayExtension(Extension):
         platform = args.strip() or None
         if self._channel_directory:
             display = self._channel_directory.format_for_display(platform)
-            context.print(display)
-        else:
-            context.print("[dim]No channel directory available. Start the gateway first.[/dim]")
+            if display.strip() != "No channels available.":
+                context.print(display)
+                return
+
+        # Fallback for daemon mode: show configured home channels from gateway.yaml.
+        try:
+            _, load_gateway_config = self._load_gateway_config_symbols()
+            cfg = load_gateway_config()
+            lines = []
+            for pc in cfg.enabled_platforms():
+                for hc in pc.home_channels:
+                    if platform and pc.platform.value != platform:
+                        continue
+                    name = hc.chat_name or hc.chat_id
+                    key = f"{pc.platform.value}:{hc.chat_id}"
+                    lines.append(f"- {name} -> `{key}`")
+            if lines:
+                context.print("**Configured home channels:**\n" + "\n".join(lines))
+                return
+        except Exception:
+            pass
+
+        context.print(
+            "[dim]No channel directory available in this tau process.[/dim]\n"
+            "[dim]If gateway is running as standalone daemon, use explicit targets like "
+            "`/send telegram:<chat_id> ...` or define `home_channels` in ~/.tau/gateway.yaml.[/dim]"
+        )
 
 
 # Module-level instance

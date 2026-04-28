@@ -22,6 +22,7 @@ Slash commands:
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -203,6 +204,25 @@ class GatewayExtension(Extension):
                 return local
 
         return None
+
+    def _load_gateway_config_symbols(self) -> tuple[Path, Any]:
+        """Load (DEFAULT_CONFIG_PATH, load_gateway_config) in package and file-import modes."""
+        try:
+            from .config import DEFAULT_CONFIG_PATH, load_gateway_config
+            return DEFAULT_CONFIG_PATH, load_gateway_config
+        except Exception:
+            pass
+
+        # Fallback when extension is imported as a standalone module file.
+        config_path = Path(__file__).resolve().parent / "config.py"
+        spec = importlib.util.spec_from_file_location("tau_gateway_config_fallback", config_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("could not build import spec for config.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        default_cfg_path = getattr(module, "DEFAULT_CONFIG_PATH")
+        load_cfg = getattr(module, "load_gateway_config")
+        return default_cfg_path, load_cfg
 
     @staticmethod
     def _list_gateway_pids() -> list[int]:
@@ -726,7 +746,7 @@ class GatewayExtension(Extension):
         do_apply = (args or "").strip().lower() == "apply"
 
         try:
-            from .config import DEFAULT_CONFIG_PATH, load_gateway_config
+            DEFAULT_CONFIG_PATH, load_gateway_config = self._load_gateway_config_symbols()
         except Exception as exc:
             context.print(f"[red]Onboarding unavailable: failed to import config module ({exc}).[/red]")
             return

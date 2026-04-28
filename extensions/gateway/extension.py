@@ -219,6 +219,8 @@ class GatewayExtension(Extension):
         if spec is None or spec.loader is None:
             raise RuntimeError("could not build import spec for config.py")
         module = importlib.util.module_from_spec(spec)
+        # Required for decorators/dataclasses that resolve module globals via sys.modules.
+        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         default_cfg_path = getattr(module, "DEFAULT_CONFIG_PATH")
         load_cfg = getattr(module, "load_gateway_config")

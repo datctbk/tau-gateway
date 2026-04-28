@@ -12,6 +12,7 @@ Tools registered:
 Slash commands:
   /gateway   : Show gateway status
   /gateway-setup : Setup guide for gateway platforms
+  /gateway-onboard : Diagnose/apply production-ready gateway config
   /gateway-start : Start standalone gateway daemon
   /gateway-stop  : Stop standalone gateway daemon
   /send      : Quick-send to a platform target
@@ -383,6 +384,11 @@ class GatewayExtension(Extension):
                 usage="/gateway-setup telegram",
             ),
             SlashCommand(
+                name="gateway-onboard",
+                description="Check readiness or create starter ~/.tau/gateway.yaml.",
+                usage="/gateway-onboard [apply]",
+            ),
+            SlashCommand(
                 name="gateway-start",
                 description="Start standalone gateway daemon in the background.",
                 usage="/gateway-start",
@@ -408,6 +414,9 @@ class GatewayExtension(Extension):
             return True
         elif command == "gateway-setup":
             self._handle_gateway_setup_slash(args, context)
+            return True
+        elif command == "gateway-onboard":
+            self._handle_gateway_onboard_slash(args, context)
             return True
         elif command == "gateway-start":
             self._handle_gateway_start_slash(context)
@@ -711,6 +720,106 @@ class GatewayExtension(Extension):
             f"[dim]Entrypoint: {entry}[/dim]\n"
             f"[dim]Log: {log_path}[/dim]"
         )
+
+    def _handle_gateway_onboard_slash(self, args: str, context: ExtensionContext) -> None:
+        """Handle /gateway-onboard [apply]."""
+        do_apply = (args or "").strip().lower() == "apply"
+
+        try:
+            from .config import DEFAULT_CONFIG_PATH, load_gateway_config
+        except Exception as exc:
+            context.print(f"[red]Onboarding unavailable: failed to import config module ({exc}).[/red]")
+            return
+
+        cfg_path = DEFAULT_CONFIG_PATH
+        token_env = os.environ.get("TAU_GATEWAY_TELEGRAM_TOKEN", "").strip()
+        provider_env = os.environ.get("TAU_GATEWAY_PROVIDER", "").strip()
+        model_env = os.environ.get("TAU_GATEWAY_MODEL", "").strip()
+        workspace_env = os.environ.get("TAU_GATEWAY_WORKSPACE_ROOT", "").strip()
+        openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+
+        try:
+            cfg = load_gateway_config(cfg_path)
+            tg_cfg = cfg.get_platform("telegram")
+        except Exception:
+            cfg = None
+            tg_cfg = None
+
+        token_cfg = (tg_cfg.token if tg_cfg else "").strip() if tg_cfg else ""
+        token = token_env or token_cfg
+        provider = provider_env or (cfg.provider if cfg else "") or "openai"
+        model = model_env or (cfg.model if cfg else "") or "gpt-4o-mini"
+        workspace = workspace_env or (cfg.workspace_root if cfg else "") or str(Path.cwd())
+
+        dep_telegram_ok = True
+        dep_yaml_ok = True
+        try:
+            import telegram  # noqa: F401
+        except Exception:
+            dep_telegram_ok = False
+        try:
+            import yaml  # noqa: F401
+        except Exception:
+            dep_yaml_ok = False
+
+        if do_apply:
+            if cfg_path.exists():
+                context.print(
+                    f"[yellow]Config already exists:[/yellow] {cfg_path}\n"
+                    "[dim]Not overwriting existing file. Edit manually or remove it first.[/dim]"
+                )
+                return
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            starter = [
+                "platforms:",
+                "  telegram:",
+                "    platform: telegram",
+                "    enabled: true",
+                f"    token: \"{token}\"",
+                "    reply_to_mode: always",
+                f"provider: {provider}",
+                f"model: {model}",
+                f"workspace_root: {workspace}",
+                "max_tokens: 8192",
+                "max_turns: 20",
+                "",
+            ]
+            cfg_path.write_text("\n".join(starter), encoding="utf-8")
+            context.print(
+                f"[green]Created starter config:[/green] {cfg_path}\n"
+                "[dim]Next: run /gateway-onboard to verify, then /gateway-start.[/dim]"
+            )
+            return
+
+        lines = ["[bold cyan]Gateway Onboarding Check[/bold cyan]", ""]
+        lines.append(f"{'[green]✓[/green]' if dep_telegram_ok else '[red]✗[/red]'} dependency: python-telegram-bot")
+        lines.append(f"{'[green]✓[/green]' if dep_yaml_ok else '[yellow]![/yellow]'} dependency: pyyaml (recommended)")
+        lines.append(f"{'[green]✓[/green]' if token else '[red]✗[/red]'} telegram token configured")
+        lines.append(f"{'[green]✓[/green]' if cfg_path.exists() else '[yellow]![/yellow]'} config file: {cfg_path}")
+        lines.append(f"{'[green]✓[/green]' if workspace else '[red]✗[/red]'} workspace_root: {workspace}")
+        if provider == "openai":
+            lines.append(f"{'[green]✓[/green]' if openai_key else '[yellow]![/yellow]'} OPENAI_API_KEY set")
+        else:
+            lines.append(f"[green]✓[/green] provider: {provider}")
+        lines.append("")
+
+        next_steps: list[str] = []
+        if not dep_telegram_ok:
+            next_steps.append("python3 -m pip install \"python-telegram-bot>=20\"")
+        if not dep_yaml_ok:
+            next_steps.append("python3 -m pip install pyyaml")
+        if not token:
+            next_steps.append("export TAU_GATEWAY_TELEGRAM_TOKEN=\"<BOT_TOKEN>\"")
+        if not cfg_path.exists():
+            next_steps.append("/gateway-onboard apply")
+        next_steps.append("/gateway-start")
+        next_steps.append("/gateway")
+
+        lines.append("[bold]Recommended next commands[/bold]")
+        for cmd in next_steps:
+            lines.append(f"  {cmd}")
+
+        context.print("\n".join(lines))
 
     def _handle_gateway_stop_slash(self, context: ExtensionContext) -> None:
         with self._stop_lock:

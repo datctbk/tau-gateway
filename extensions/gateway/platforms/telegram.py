@@ -8,7 +8,10 @@ Install: pip install python-telegram-bot
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import subprocess
 from typing import Any, Optional
 
 from ..adapter import BasePlatformAdapter
@@ -27,6 +30,20 @@ class TelegramAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config)
         self._app: Any = None
+        self._stt_model = (
+            os.environ.get("TAU_GATEWAY_STT_MODEL", "").strip()
+            or str(self.config.extra.get("stt_model", "")).strip()
+            or "gpt-4o-mini-transcribe"
+        )
+        self._stt_command = (
+            os.environ.get("TAU_GATEWAY_STT_COMMAND", "").strip()
+            or str(self.config.extra.get("stt_command", "")).strip()
+        )
+        stt_enabled_raw = (
+            os.environ.get("TAU_GATEWAY_STT_ENABLED", "").strip()
+            or str(self.config.extra.get("stt_enabled", "true")).strip()
+        ).lower()
+        self._stt_enabled = stt_enabled_raw in {"1", "true", "yes", "on"}
 
     async def start(self) -> None:
         """Connect to Telegram and start polling for updates."""
@@ -276,8 +293,14 @@ class TelegramAdapter(BasePlatformAdapter):
             except Exception as exc:
                 logger.warning("Failed to download voice: %s", exc)
 
+        text = "[Voice message]"
+        if self._stt_enabled and media_paths:
+            transcript = await self._transcribe_audio(media_paths[0])
+            if transcript:
+                text = transcript
+
         event = MessageEvent(
-            text="[Voice message]",
+            text=text,
             message_type=MessageType.VOICE,
             source=source,
             message_id=str(update.message.message_id),
@@ -285,6 +308,65 @@ class TelegramAdapter(BasePlatformAdapter):
             raw=update,
         )
         await self._dispatch_message(event)
+
+    async def _transcribe_audio(self, audio_path: str) -> str | None:
+        """Transcribe audio using configured command or OpenAI SDK."""
+        if self._stt_command:
+            out = await asyncio.to_thread(self._run_stt_command, audio_path)
+            if out:
+                return out
+
+        openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not openai_key:
+            logger.info("STT skipped: OPENAI_API_KEY is not set and no TAU_GATEWAY_STT_COMMAND configured.")
+            return None
+
+        try:
+            from openai import OpenAI
+        except Exception:
+            logger.warning("STT skipped: openai package is not installed.")
+            return None
+
+        try:
+            client = OpenAI(api_key=openai_key)
+            with open(audio_path, "rb") as audio_file:
+                transcript = await asyncio.to_thread(
+                    client.audio.transcriptions.create,
+                    model=self._stt_model,
+                    file=audio_file,
+                )
+            text = getattr(transcript, "text", None)
+            if text and str(text).strip():
+                return str(text).strip()
+        except Exception as exc:
+            logger.warning("STT transcription failed: %s", exc)
+        return None
+
+    def _run_stt_command(self, audio_path: str) -> str | None:
+        """Run shell STT command and read transcript from stdout.
+
+        Command can reference `{file}` placeholder for the audio path.
+        """
+        try:
+            if "{file}" in self._stt_command:
+                command = self._stt_command.replace("{file}", audio_path)
+            else:
+                command = f"{self._stt_command} \"{audio_path}\""
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if result.returncode != 0:
+                logger.warning("STT command failed (%s): %s", result.returncode, result.stderr.strip())
+                return None
+            text = (result.stdout or "").strip()
+            return text or None
+        except Exception as exc:
+            logger.warning("STT command execution failed: %s", exc)
+            return None
 
     async def list_channels(self) -> list[dict[str, Any]]:
         """Telegram doesn't have a list-channels API for bots."""

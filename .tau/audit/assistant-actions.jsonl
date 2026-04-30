@@ -1,0 +1,1 @@
+{"timestamp": "2026-04-30T02:24:07.786987+00:00", "event_type": "tool.completed", "payload": {"tool": "web_search", "tool_call_id": "58b9795a-b60b-450e-b6b3-82af98e9e727", "is_error": false}}

@@ -61,6 +61,30 @@ python3 /abs/path/to/tau-gateway/__main__.py
 - Send `/start`
 - Send `/status`
 - Send a normal message and confirm agent response
+- Send a voice note (optional STT setup below)
+
+## Speech-to-Text (STT) for Telegram Voice Notes
+
+Telegram voice/audio messages can be auto-transcribed before sending to tau.
+
+Environment options:
+
+```bash
+export TAU_GATEWAY_STT_ENABLED=true
+export TAU_GATEWAY_STT_MODEL="gpt-4o-mini-transcribe"   # or whisper-1
+export OPENAI_API_KEY="..."
+```
+
+Optional custom command mode (if you want local STT tool instead of OpenAI SDK):
+
+```bash
+export TAU_GATEWAY_STT_COMMAND='my_stt_tool --input "{file}"'
+```
+
+Notes:
+- If `TAU_GATEWAY_STT_COMMAND` is set, gateway uses it first.
+- Otherwise it uses OpenAI transcription when `OPENAI_API_KEY` + `openai` package are available.
+- If STT is unavailable/fails, gateway falls back to `[Voice message]`.
 
 ## Runtime Notes
 

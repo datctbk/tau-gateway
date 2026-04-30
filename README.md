@@ -97,6 +97,7 @@ Notes:
   - `/gateway-start` starts gateway in background (log: `~/.tau/gateway/gateway.log`)
   - `/gateway-stop` stops the managed background process
   - `/gateway` shows managed PID/log status
+  - `/gateway-logs [limit] [filter]` tails structured events from `~/.tau/gateway/events.jsonl`
 - Startup source is deterministic:
   - default: `__main__.py` next to the loaded gateway extension package
   - override: `TAU_GATEWAY_ENTRYPOINT=/abs/path/to/__main__.py`
@@ -114,6 +115,11 @@ Notes:
   - install: `python3 -m pip install "python-telegram-bot>=20"`
 - Gateway starts but no reply
   - verify bot token, check `reply_to_mode`, and confirm provider credentials are set
+- Better diagnostics:
+  - use `/gateway-logs` to inspect structured events with per-message `trace_id`
+  - filter examples:
+    - `/gateway-logs 50 agent.error`
+    - `/gateway-logs 30 message.inbound`
 - No adapters initialized
   - check `enabled: true` under `platforms.telegram`
 

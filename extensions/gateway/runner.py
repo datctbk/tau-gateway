@@ -8,6 +8,8 @@ responses back to the originating platform.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import signal
 import time
@@ -52,9 +54,35 @@ class GatewayRunner:
         self._channels = ChannelDirectory()
         self._running = False
         self._start_time: float | None = None
+        self._events_log_path = self._gateway_runtime_dir() / "events.jsonl"
 
         # Optional: SQLite state store integration
         self._state_db: Any = None
+
+    @staticmethod
+    def _gateway_runtime_dir() -> Path:
+        p = Path.home() / ".tau" / "gateway"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _new_trace_id(self, event: MessageEvent) -> str:
+        base = (
+            f"{event.source.platform}|{event.source.chat_id}|"
+            f"{event.message_id}|{event.timestamp:.6f}|{event.text[:64]}"
+        )
+        return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+
+    def _emit_event(self, name: str, payload: dict[str, Any]) -> None:
+        row = {
+            "ts": time.time(),
+            "event": name,
+            **payload,
+        }
+        try:
+            with self._events_log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     def _init_state_db(self) -> None:
         """Try to initialize the SQLite state store."""
@@ -107,6 +135,18 @@ class GatewayRunner:
     async def _handle_message(self, event: MessageEvent) -> None:
         """Process an inbound message: session lookup → agent → deliver response."""
         source = event.source
+        trace_id = self._new_trace_id(event)
+        self._emit_event(
+            "message.inbound",
+            {
+                "trace_id": trace_id,
+                "platform": source.platform,
+                "chat_id": source.chat_id,
+                "message_id": event.message_id,
+                "message_type": str(getattr(event.message_type, "value", event.message_type)),
+                "text_preview": (event.text or "")[:200],
+            },
+        )
 
         # Record channel in directory
         self._channels.add_from_source(source)
@@ -118,6 +158,7 @@ class GatewayRunner:
         if event.text.startswith("/"):
             handled = await self._handle_command(event)
             if handled:
+                self._emit_event("message.command_handled", {"trace_id": trace_id, "command": event.text})
                 return
 
         # Get or create session
@@ -167,6 +208,18 @@ class GatewayRunner:
         if response_text:
             targets = self._delivery.resolve_targets(source)
             results = await self._delivery.dispatch(response_text, targets)
+            failed = [r for r in results if not r.success]
+            self._emit_event(
+                "message.outbound",
+                {
+                    "trace_id": trace_id,
+                    "session_id": entry.session_id,
+                    "target_count": len(targets),
+                    "delivered_count": len([r for r in results if r.success]),
+                    "failed_count": len(failed),
+                    "failures": [{"error": x.error, "retryable": x.retryable} for x in failed[:3]],
+                },
+            )
             self._hooks.emit("message:outbound", {
                 "session_id": entry.session_id,
                 "text_length": len(response_text),
@@ -266,6 +319,15 @@ class GatewayRunner:
                 "session_id": entry.session_id,
                 "source": event.source.to_dict(),
             })
+            self._emit_event(
+                "agent.start",
+                {
+                    "session_id": entry.session_id,
+                    "platform": event.source.platform,
+                    "provider": self.config.provider,
+                    "model": self.config.model,
+                },
+            )
 
             with create_session(
                 provider=self.config.provider,
@@ -288,6 +350,14 @@ class GatewayRunner:
                 "session_id": entry.session_id,
                 "response_length": len(response),
             })
+            self._emit_event(
+                "agent.end",
+                {
+                    "session_id": entry.session_id,
+                    "response_length": len(response),
+                    "ok": True,
+                },
+            )
 
             return response.strip()
 
@@ -300,7 +370,27 @@ class GatewayRunner:
                 "session_id": entry.session_id,
                 "error": str(exc),
             })
-            return f"⚠️ Error processing your message: {exc}"
+            err = str(exc)
+            user_reason = (
+                "Provider authentication/config issue."
+                if any(k in err.lower() for k in ("api key", "authentication", "unauthorized", "401"))
+                else "Network/provider unavailable."
+                if any(k in err.lower() for k in ("timeout", "timed out", "connection", "network", "502", "503", "504"))
+                else "Runtime error while processing your request."
+            )
+            self._emit_event(
+                "agent.error",
+                {
+                    "session_id": entry.session_id,
+                    "error": err,
+                    "user_reason": user_reason,
+                },
+            )
+            return (
+                "⚠️ I couldn't complete your request.\n"
+                f"Reason: {user_reason}\n"
+                "Try /status, then retry. If this keeps happening, check gateway logs."
+            )
 
     # ── Cron Scheduling ──
 

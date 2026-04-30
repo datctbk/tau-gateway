@@ -13,6 +13,7 @@ Slash commands:
   /gateway   : Show gateway status
   /gateway-setup : Setup guide for gateway platforms
   /gateway-onboard : Diagnose/apply production-ready gateway config
+  /gateway-logs : Tail structured gateway events
   /gateway-start : Start standalone gateway daemon
   /gateway-stop  : Stop standalone gateway daemon
   /send      : Quick-send to a platform target
@@ -416,6 +417,11 @@ class GatewayExtension(Extension):
                 usage="/gateway-start",
             ),
             SlashCommand(
+                name="gateway-logs",
+                description="Tail structured gateway events from ~/.tau/gateway/events.jsonl.",
+                usage="/gateway-logs [limit] [filter]",
+            ),
+            SlashCommand(
                 name="gateway-stop",
                 description="Stop standalone gateway daemon started by /gateway-start.",
                 usage="/gateway-stop",
@@ -442,6 +448,9 @@ class GatewayExtension(Extension):
             return True
         elif command == "gateway-start":
             self._handle_gateway_start_slash(context)
+            return True
+        elif command == "gateway-logs":
+            self._handle_gateway_logs_slash(args, context)
             return True
         elif command == "gateway-stop":
             self._handle_gateway_stop_slash(context)
@@ -885,6 +894,58 @@ class GatewayExtension(Extension):
 
         threading.Thread(target=_worker, daemon=True, name="GatewayStopWorker").start()
         context.print("[yellow]Stopping gateway in background...[/yellow] Check /gateway in a few seconds.")
+
+    def _handle_gateway_logs_slash(self, args: str, context: ExtensionContext) -> None:
+        """Handle /gateway-logs [limit] [filter]."""
+        parts = (args or "").split(None, 1)
+        limit = 30
+        filt = ""
+        if parts:
+            try:
+                limit = max(1, min(200, int(parts[0])))
+                if len(parts) > 1:
+                    filt = parts[1].strip().lower()
+            except Exception:
+                filt = (args or "").strip().lower()
+        events_path = self._gateway_runtime_dir() / "events.jsonl"
+        if not events_path.exists():
+            context.print(f"[dim]No structured events file yet: {events_path}[/dim]")
+            return
+        try:
+            lines = events_path.read_text(encoding="utf-8").splitlines()
+        except Exception as exc:
+            context.print(f"[red]Failed to read events log:[/red] {exc}")
+            return
+        rows = lines[-max(limit * 4, limit):]
+        out: list[str] = ["[bold cyan]Gateway Events[/bold cyan]"]
+        count = 0
+        for raw in reversed(rows):
+            try:
+                obj = json.loads(raw)
+            except Exception:
+                continue
+            text = json.dumps(obj, ensure_ascii=False)
+            if filt and filt not in text.lower():
+                continue
+            ts = obj.get("ts", "")
+            evt = obj.get("event", "")
+            trace_id = obj.get("trace_id", "")
+            preview = (
+                obj.get("text_preview")
+                or obj.get("error")
+                or obj.get("user_reason")
+                or obj.get("session_id")
+                or ""
+            )
+            out.append(f"- ts={ts} event={evt} trace={trace_id} {str(preview)[:160]}")
+            count += 1
+            if count >= limit:
+                break
+        if count == 0:
+            context.print("[dim]No events matched filter.[/dim]")
+            return
+        out.append(f"\n[dim]source: {events_path}[/dim]")
+        context.print("\n".join(out))
 
     def _handle_channels_slash(self, args: str, context: ExtensionContext) -> None:
         """Handle /channels [platform]."""

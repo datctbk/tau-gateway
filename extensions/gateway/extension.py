@@ -227,6 +227,24 @@ class GatewayExtension(Extension):
         load_cfg = getattr(module, "load_gateway_config")
         return default_cfg_path, load_cfg
 
+    def _parse_delivery_target(self, target: str):
+        """Parse DeliveryTarget in both package-import and file-import modes."""
+        try:
+            from .types import DeliveryTarget
+            return DeliveryTarget.parse(target)
+        except Exception:
+            types_path = Path(__file__).resolve().parent / "types.py"
+            spec = importlib.util.spec_from_file_location(
+                "tau_gateway_types_fallback", types_path
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError("could not build import spec for types.py")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            delivery_target = getattr(module, "DeliveryTarget")
+            return delivery_target.parse(target)
+
     @staticmethod
     def _list_gateway_pids() -> list[int]:
         """Return running gateway daemon pids discovered from process command lines."""
@@ -495,8 +513,7 @@ class GatewayExtension(Extension):
 
         # Parse target
         try:
-            from .types import DeliveryTarget
-            dt = DeliveryTarget.parse(target)
+            dt = self._parse_delivery_target(target)
         except ValueError as e:
             return f"Error: {e}"
         except Exception as e:  # noqa: BLE001

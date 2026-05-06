@@ -499,6 +499,8 @@ class GatewayExtension(Extension):
             dt = DeliveryTarget.parse(target)
         except ValueError as e:
             return f"Error: {e}"
+        except Exception as e:  # noqa: BLE001
+            return f"Error: could not parse delivery target '{target}': {e}"
 
         # Try to send via runner if available
         if self._runner:

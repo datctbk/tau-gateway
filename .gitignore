@@ -25,3 +25,4 @@ extensions/gateway/__pycache__/session.cpython-311.pyc
 extensions/gateway/__pycache__/types.cpython-311.pyc
 extensions/gateway/platforms/__pycache__/__init__.cpython-311.pyc
 extensions/gateway/platforms/__pycache__/telegram.cpython-311.pyc
+extensions/gateway/__pycache__/extension.cpython-39.pyc

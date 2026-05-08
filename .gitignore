@@ -25,4 +25,17 @@ extensions/gateway/__pycache__/session.cpython-311.pyc
 extensions/gateway/__pycache__/types.cpython-311.pyc
 extensions/gateway/platforms/__pycache__/__init__.cpython-311.pyc
 extensions/gateway/platforms/__pycache__/telegram.cpython-311.pyc
+<<<<<<< Updated upstream
 extensions/gateway/__pycache__/extension.cpython-39.pyc
+=======
+extensions/gateway/__pycache__/adapter.cpython-312.pyc
+extensions/gateway/__pycache__/channel_directory.cpython-312.pyc
+extensions/gateway/__pycache__/config.cpython-312.pyc
+extensions/gateway/__pycache__/delivery.cpython-312.pyc
+extensions/gateway/__pycache__/hooks.cpython-312.pyc
+extensions/gateway/__pycache__/runner.cpython-312.pyc
+extensions/gateway/__pycache__/session.cpython-312.pyc
+extensions/gateway/__pycache__/types.cpython-312.pyc
+extensions/gateway/platforms/__pycache__/__init__.cpython-312.pyc
+extensions/gateway/platforms/__pycache__/telegram.cpython-312.pyc
+>>>>>>> Stashed changes

@@ -27,6 +27,8 @@ import importlib.util
 import json
 import logging
 import os
+import urllib.parse
+import urllib.request
 from pathlib import Path
 import signal
 import subprocess
@@ -244,6 +246,44 @@ class GatewayExtension(Extension):
             spec.loader.exec_module(module)
             delivery_target = getattr(module, "DeliveryTarget")
             return delivery_target.parse(target)
+
+    def _send_telegram_fallback(
+        self,
+        chat_id: str,
+        message: str,
+        thread_id: str | None = None,
+    ) -> str:
+        """Direct Telegram Bot API send for cases where runner is not attached."""
+        try:
+            _, load_gateway_config = self._load_gateway_config_symbols()
+            cfg = load_gateway_config()
+            telegram_cfg = cfg.get_platform("telegram")
+            token = (
+                os.environ.get("TAU_GATEWAY_TELEGRAM_TOKEN", "").strip()
+                or (telegram_cfg.token.strip() if telegram_cfg and telegram_cfg.token else "")
+            )
+            if not token:
+                return "❌ Failed to send: missing Telegram token (TAU_GATEWAY_TELEGRAM_TOKEN or gateway.yaml)"
+
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload: dict[str, str | int] = {
+                "chat_id": int(chat_id),
+                "text": message,
+            }
+            if thread_id:
+                payload["message_thread_id"] = int(thread_id)
+
+            data = urllib.parse.urlencode(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data, method="POST")
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            obj = json.loads(raw)
+            if not obj.get("ok"):
+                return f"❌ Failed to send: Telegram API error: {obj}"
+            msg_id = (((obj.get("result") or {}).get("message_id")) or "")
+            return f"✅ Message sent to telegram:{chat_id} (id: {msg_id}) [fallback]"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Failed to send via Telegram fallback: {e}"
 
     @staticmethod
     def _list_gateway_pids() -> list[int]:
@@ -546,6 +586,14 @@ class GatewayExtension(Extension):
                     return f"❌ Failed to send: {result.error}"
             except Exception as e:
                 return f"Error sending message: {e}"
+
+        # Fallback path: direct Telegram API send when daemon/runner is external.
+        if dt.platform == "telegram":
+            return self._send_telegram_fallback(
+                chat_id=dt.chat_id,
+                message=message,
+                thread_id=dt.thread_id,
+            )
 
         return (
             "Gateway is not running. Start it with:\n"
